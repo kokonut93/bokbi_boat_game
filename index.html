@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>세 물 건너기 — 복비 보트 (Lite)</title>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background:#0f1116; color:#e9ecf1; font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif; }
+  /* 모바일 주소창 포함 꽉 차게 */
+  .wrap { min-height: 100dvh; display:flex; align-items:center; justify-content:center; padding:12px; box-sizing:border-box; }
+  .panel { width:min(460px,100%); }
+  .hud { display:flex; justify-content:space-between; align-items:center; margin:6px 0 10px; font-size:13px; color:#cfd6e4; }
+  .btn { cursor:pointer; font-size:13px; background:#1b1e27; border:1px solid #2d3241; color:#e9ecf1; padding:6px 10px; border-radius:6px; touch-action:manipulation; -webkit-tap-highlight-color: transparent; }
+  .btn:active { transform: translateY(1px); }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; margin-top:8px; color:#aeb6c8; }
+  .dot { display:inline-block; width:10px; height:10px }
+  .w { background:#f4f6ff; border:1px solid #bfc7ff }
+  .y { background:#ffd75a; border:1px solid #e7b900 }
+  .r { background:#ff4466; border:1px solid #d1203e }
+  .touch { display:flex; gap:8px; margin-top:8px }
+  .touch .btn { flex:1; padding:14px 0; font-weight:700; font-size:14px; }
+  .overlay { position:relative }
+  canvas {
+    width:100%; height:auto; image-rendering:pixelated;
+    border:1px solid #2d3241; background:#0b0e14; border-radius:8px; display:block;
+    touch-action:none; /* 스와이프/더블탭 줌 방지 */
+  }
+  .mask { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(10,12,18,.9); border-radius:8px; text-align:center; gap:12px; }
+  .title { font-size:18px; letter-spacing:.4px }
+  .hint { font-size:12px; color:#c9cedc }
+  .big { font-size:16px; padding:10px 14px }
+  .help { font-size:11px; color:#8a90a3; margin-top:6px }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div class="hud">
+      <div>점수: <span id="score">0</span></div>
+      <div>평정: <span id="lives">3</span></div>
+      <button id="restart" class="btn">다시</button>
+    </div>
+
+    <div class="overlay">
+      <canvas id="game" width="160" height="240" tabindex="0" aria-label="세 물 건너기 캔버스"></canvas>
+      <div id="mask" class="mask" role="dialog" aria-live="polite">
+        <div class="title">세 물 건너기 — 복비 보트</div>
+        <div class="hint">START를 누르거나 캔버스를 한 번 터치/클릭하세요</div>
+        <button id="start" class="btn big">START</button>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div><span class="dot w"></span> 흰 물(회복) +3</div>
+      <div><span class="dot y"></span> 노란 물(유지) +1</div>
+      <div><span class="dot r"></span> 붉은 물(파국) -1 · 3회 충돌 시 종료</div>
+    </div>
+
+    <div class="touch" aria-hidden="false">
+      <button id="left" class="btn" aria-label="왼쪽">← 왼쪽</button>
+      <button id="right" class="btn" aria-label="오른쪽">오른쪽 →</button>
+    </div>
+
+    <div class="help">조작: ← → 키 또는 화면 버튼 · 일부 메신저/클라우드 미리보기에서는 동작하지 않을 수 있습니다. URL을 브라우저(사파리/크롬)로 여세요.</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d', { alpha: false });
+  const W = cvs.width, H = cvs.height;
+  const mask = document.getElementById('mask');
+  const startBtn = document.getElementById('start');
+  const restartBtn = document.getElementById('restart');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const btnL = document.getElementById('left');
+  const btnR = document.getElementById('right');
+
+  let rafId = null, running = false, pausedByVisibility = false;
+  let t=0, score=0, lives=3, timer=60*60;
+  let white=0, yellow=0, red=0;
+
+  const st = { x: Math.floor(W/2), y: H-28, left:false, right:false, drops:[] };
+
+  function px(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
+  function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+
+  function drawBg(){
+    for(let i=0;i<H;i+=8){ px(0,i,W,8,(i%16===0)?'#0e1422':'#0c111c'); }
+    if((t&3)===0){ for(let i=0;i<6;i++){ px(rand(0,W),rand(0,H),1,1,'rgba(255,255,255,0.04)'); } }
+  }
+
+  function drawBearBoat(x,y){
+    const outline='#33231a', bear='#8c5a3a', shade='#6f4730', nose='#ff3b3b', eye='#0b0b0b', hull='#9ad1ff', edge='#3b6fa8';
+    for(let i=0;i<12;i++) px(x+i,y+7,1,1,edge);
+    for(let i=1;i<11;i++) px(x+i,y+6,1,1,hull);
+    px(x+2,y+0,2,2,shade); px(x+8,y+0,2,2,shade);
+    for(let i=2;i<10;i++) px(x+i,y+2,1,1,bear);
+    for(let i=2;i<10;i++) px(x+i,y+3,1,1,bear);
+    for(let i=3;i<9;i++)  px(x+i,y+4,1,1,bear);
+    px(x+3,y+3,1,1,shade); px(x+8,y+3,1,1,shade);
+    px(x+4,y+3,1,1,eye); px(x+7,y+3,1,1,eye);
+    px(x+5,y+4,2,1,nose);
+    px(x+2,y+2,1,1,outline); px(x+9,y+2,1,1,outline);
+    for(let i=3;i<9;i++) px(x+i,y+5,1,1,shade);
+  }
+
+  function spawnDrop(){
+    const r = Math.random();
+    const type = r<0.28 ? 'w' : r<0.65 ? 'y' : 'r';
+    st.drops.push({x:rand(4,W-6), y:-4, vy:1+Math.random()*1.2, type});
+  }
+  function drawDrop(d){
+    const color = d.type==='w' ? '#f4f6ff' : d.type==='y' ? '#ffd75a' : '#ff4466';
+    px((d.x|0),(d.y|0),3,3,color);
+  }
+  function hit(ax,ay,aw,ah,bx,by,bw,bh){ return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by; }
+
+  function reset(){
+    t=0; score=0; lives=3; timer=60*60; white=0; yellow=0; red=0;
+    st.x = (W>>1); st.y = H-28; st.left=false; st.right=false; st.drops=[];
+    scoreEl.textContent = score; livesEl.textContent = lives;
+    ctx.clearRect(0,0,W,H);
+  }
+
+  function start(){
+    if(running) return;
+    running = true;
+    mask.style.display='none';
+    step();
+  }
+
+  function end(finalState){
+    running = false;
+    if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
+    ctx.fillStyle='rgba(10,12,18,0.9)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#e9e9ec'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='12px monospace';
+    ctx.fillText('라운드 종료', W/2, H/2 - 22);
+    ctx.fillText('결과: ' + finalState, W/2, H/2 - 6);
+    ctx.fillText('점수 ' + score + '  흰 ' + white + '  노 ' + yellow + '  붉 ' + red, W/2, H/2 + 10);
+    setTimeout(()=>{ mask.style.display='flex'; startBtn.textContent='RESTART'; }, 300);
+  }
+
+  function step(){
+    if(!running){ return; }
+    rafId = requestAnimationFrame(step);
+
+    t++; timer--;
+    ctx.clearRect(0,0,W,H);
+    drawBg();
+
+    if((t%20)===0) spawnDrop();
+    if((t%600)===0) st.drops.forEach(d=> d.vy+=0.1);
+
+    const speed = 2.0;
+    if(st.left) st.x -= speed;
+    if(st.right) st.x += speed;
+    st.x = Math.max(2, Math.min(W-14, st.x|0));
+
+    drawBearBoat(st.x|0, st.y);
+
+    for(let i=st.drops.length-1;i>=0;i--){
+      const d = st.drops[i];
+      d.y += d.vy; drawDrop(d);
+      if(hit(st.x, st.y, 12, 10, d.x, d.y, 3, 3)){
+        if(d.type==='w'){ score += 3; white++; }
+        if(d.type==='y'){ score += 1; yellow++; }
+        if(d.type==='r'){ score -= 1; red++; lives--; }
+        scoreEl.textContent = score; livesEl.textContent = lives;
+        st.drops.splice(i,1);
+        if(lives<=0){ end('파국'); return; }
+      } else if(d.y > H+4){
+        st.drops.splice(i,1);
+      }
+    }
+
+    if(timer<=0){
+      let final='유지';
+      if(white>=8 && red<=1) final='회복';
+      if(red>=3 || score<0) final='파국';
+      end(final); return;
+    }
+  }
+
+  // 키보드
+  addEventListener('keydown', e=>{
+    if(e.key==='ArrowLeft')  st.left = true;
+    if(e.key==='ArrowRight') st.right = true;
+  }, {passive:true});
+  addEventListener('keyup', e=>{
+    if(e.key==='ArrowLeft')  st.left = false;
+    if(e.key==='ArrowRight') st.right = false;
+  }, {passive:true});
+
+  // 터치/마우스 버튼
+  const press = (btn, on, off)=>{
+    btn.addEventListener('touchstart', e=>{ e.preventDefault(); on(); }, {passive:false});
+    btn.addEventListener('touchend',   e=>{ e.preventDefault(); off(); }, {passive:false});
+    btn.addEventListener('mousedown',  e=>{ e.preventDefault(); on(); });
+    addEventListener('mouseup', ()=> off(), {passive:true});
+    // 버튼 영역 밖 드래그시 스크롤/줌 방지
+    btn.addEventListener('touchmove', e=>{ e.preventDefault(); }, {passive:false});
+  };
+  press(btnL, ()=> st.left=true,  ()=> st.left=false);
+  press(btnR, ()=> st.right=true, ()=> st.right=false);
+
+  // 캔버스 클릭/터치로 시작
+  const startFromCanvas = ()=>{ if(!running){ reset(); start(); } };
+  cvs.addEventListener('click', startFromCanvas, {passive:true});
+  cvs.addEventListener('touchstart', e=>{ e.preventDefault(); startFromCanvas(); }, {passive:false});
+
+  // 시작/다시
+  startBtn.addEventListener('click', ()=>{ reset(); start(); }, {passive:true});
+  restartBtn.addEventListener('click', ()=>{
+    if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
+    running=false; reset();
+    mask.style.display='flex'; startBtn.textContent='START';
+  }, {passive:true});
+
+  // 탭 비활성화/재활성화 시 루프 일시정지/재개
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden){
+      if(running){ pausedByVisibility = true; running=false; if(rafId){ cancelAnimationFrame(rafId); rafId=null; } }
+    } else {
+      if(pausedByVisibility){ pausedByVisibility=false; running=true; step(); }
+    }
+  });
+
+  // 더블탭 줌 방지 (iOS)
+  let lastTouch = 0;
+  document.addEventListener('touchend', (e) => {
+    const now = performance.now();
+    if(now - lastTouch < 300){ e.preventDefault(); }
+    lastTouch = now;
+  }, {passive:false});
+
+  // 초기
+  reset();
+  mask.style.display='flex';
+})();
+</script>
+</body>
+</html>
